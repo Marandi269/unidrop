@@ -1,0 +1,22 @@
+[package]
+name = "unidrop-daemon"
+description = "UniDrop background service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "unidropd"
+path = "src/main.rs"
+
+[dependencies]
+unidrop-core.workspace = true
+unidrop-engine.workspace = true
+unidrop-protocol-localsend.workspace = true
+
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+dirs.workspace = true
+hostname.workspace = true

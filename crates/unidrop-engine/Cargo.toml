@@ -1,0 +1,19 @@
+[package]
+name = "unidrop-engine"
+description = "UniDrop Engine - Protocol router and manager"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+unidrop-core.workspace = true
+
+tokio.workspace = true
+tokio-stream.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+parking_lot.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+dirs.workspace = true
+hostname.workspace = true

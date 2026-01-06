@@ -1,0 +1,17 @@
+[package]
+name = "unidrop-core"
+description = "Core abstractions for UniDrop - protocol-agnostic types and traits"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio.workspace = true
+tokio-stream.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+bytes.workspace = true
+tracing.workspace = true

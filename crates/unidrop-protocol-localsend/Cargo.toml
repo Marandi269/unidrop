@@ -1,0 +1,40 @@
+[package]
+name = "unidrop-protocol-localsend"
+description = "LocalSend protocol implementation for UniDrop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+unidrop-core.workspace = true
+
+# Async
+tokio.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+
+# HTTP
+axum.workspace = true
+reqwest.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+http-body-util = "0.1"
+
+# mDNS
+mdns-sd.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# TLS
+rcgen.workspace = true
+sha2.workspace = true
+hex.workspace = true
+
+# Utils
+parking_lot.workspace = true
+uuid.workspace = true
+bytes.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
