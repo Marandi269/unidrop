@@ -9,11 +9,13 @@
 //! - 支持文件和文本传输
 
 mod cert;
+mod client;
 mod discovery;
 mod models;
+mod multicast;
 mod protocol;
+pub mod quic;
 mod server;
-mod client;
 
 pub use protocol::{LocalSendProtocol, LocalSendFactory};
 

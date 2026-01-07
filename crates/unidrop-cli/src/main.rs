@@ -9,6 +9,7 @@ use tracing_subscriber::FmtSubscriber;
 use unidrop_core::{DeviceId, ProtocolId, TransferIntent};
 use unidrop_engine::{Engine, EngineConfig};
 use unidrop_protocol_localsend::LocalSendFactory;
+use unidrop_protocol_p2p::P2pFactory;
 
 #[derive(Parser)]
 #[command(name = "drop")]
@@ -20,6 +21,14 @@ struct Cli {
     /// Enable verbose output
     #[arg(short, long, global = true)]
     verbose: bool,
+
+    /// Port to listen on (default: 53317)
+    #[arg(short, long, global = true)]
+    port: Option<u16>,
+
+    /// Device name
+    #[arg(short, long, global = true)]
+    name: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -33,9 +42,13 @@ enum Commands {
         #[arg(required = true)]
         files: Vec<PathBuf>,
 
-        /// Target device (fingerprint or name)
+        /// Target device (fingerprint, name, or IP:port like 192.168.1.100:53317)
         #[arg(short, long)]
         to: Option<String>,
+
+        /// Use QUIC transport (faster, but only works with UniDrop receivers)
+        #[arg(long)]
+        quic: bool,
     },
 
     /// Show registered protocols
@@ -59,11 +72,11 @@ async fn main() -> Result<()> {
     tracing::subscriber::set_global_default(subscriber)?;
 
     // 创建 Engine
-    let engine = create_engine();
+    let engine = create_engine(cli.port, cli.name);
 
     match cli.command {
         Commands::Devices => list_devices(&engine).await?,
-        Commands::Send { files, to } => send_files(&engine, files, to).await?,
+        Commands::Send { files, to, quic } => send_files(&engine, files, to, quic).await?,
         Commands::Protocols => list_protocols(&engine),
         Commands::Receive => receive_mode(&engine).await?,
     }
@@ -71,12 +84,17 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn create_engine() -> Engine {
-    let config = EngineConfig {
-        device_name: hostname::get()
+fn create_engine(port: Option<u16>, name: Option<String>) -> Engine {
+    let device_name = name.unwrap_or_else(|| {
+        hostname::get()
             .ok()
             .and_then(|h| h.into_string().ok())
-            .unwrap_or_else(|| "UniDrop-CLI".to_string()),
+            .unwrap_or_else(|| "UniDrop-CLI".to_string())
+    });
+
+    let config = EngineConfig {
+        device_name,
+        port: port.unwrap_or(0), // 0 means use default
         save_dir: dirs::download_dir()
             .or_else(dirs::home_dir)
             .unwrap_or_else(std::env::temp_dir)
@@ -88,16 +106,17 @@ fn create_engine() -> Engine {
     Engine::builder()
         .config(config)
         .with_protocol(LocalSendFactory::new())
+        .with_protocol(P2pFactory::new())
         .build()
 }
 
 async fn list_devices(engine: &Engine) -> Result<()> {
     engine.start().await?;
 
-    println!("Scanning for devices...\n");
+    println!("Scanning for devices (5 seconds)...\n");
 
     // 等待一段时间让 mDNS 发现设备
-    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
 
     let devices = engine.devices().await;
 
@@ -122,7 +141,7 @@ async fn list_devices(engine: &Engine) -> Result<()> {
     Ok(())
 }
 
-async fn send_files(engine: &Engine, files: Vec<PathBuf>, to: Option<String>) -> Result<()> {
+async fn send_files(engine: &Engine, files: Vec<PathBuf>, to: Option<String>, use_quic: bool) -> Result<()> {
     // 检查文件是否存在
     for file in &files {
         if !file.exists() {
@@ -168,11 +187,18 @@ async fn send_files(engine: &Engine, files: Vec<PathBuf>, to: Option<String>) ->
         }
     };
 
-    println!("Sending {} file(s) to {}...\n", files.len(), target.name());
+    let transport = if use_quic { "QUIC" } else { "HTTPS" };
+    println!("Sending {} file(s) to {} via {}...\n", files.len(), target.name(), transport);
 
     let intent = TransferIntent::new(target.id().clone(), files);
 
-    match engine.send(intent).await {
+    let result = if use_quic {
+        engine.send_quic(intent).await
+    } else {
+        engine.send(intent).await
+    };
+
+    match result {
         Ok(session_id) => {
             println!("Transfer completed successfully!");
             println!("Session ID: {}", session_id);

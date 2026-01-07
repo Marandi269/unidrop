@@ -136,6 +136,13 @@ pub trait Protocol: Send + Sync {
     /// 返回传输 ID，进度通过事件通道推送
     async fn send(&self, intent: TransferIntent) -> Result<String>;
 
+    /// 使用 QUIC 发送文件（可选实现）
+    ///
+    /// 默认返回不支持错误，协议可以覆盖此方法提供 QUIC 支持
+    async fn send_quic(&self, _intent: TransferIntent) -> Result<String> {
+        Err(crate::Error::Protocol("QUIC transport not supported by this protocol".into()))
+    }
+
     /// 接受传输请求
     async fn accept(&self, request_id: &str, save_dir: PathBuf) -> Result<()>;
 

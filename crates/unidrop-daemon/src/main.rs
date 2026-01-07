@@ -6,6 +6,7 @@ use tracing_subscriber::FmtSubscriber;
 
 use unidrop_engine::{Engine, EngineConfig};
 use unidrop_protocol_localsend::LocalSendFactory;
+use unidrop_protocol_p2p::P2pFactory;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -23,6 +24,7 @@ async fn main() -> Result<()> {
             .ok()
             .and_then(|h| h.into_string().ok())
             .unwrap_or_else(|| "UniDrop".to_string()),
+        port: 0, // 使用默认端口
         save_dir: dirs::download_dir()
             .or_else(dirs::home_dir)
             .unwrap_or_else(std::env::temp_dir)
@@ -41,6 +43,7 @@ async fn main() -> Result<()> {
     let engine = Engine::builder()
         .config(config)
         .with_protocol(LocalSendFactory::new())
+        .with_protocol(P2pFactory::new())  // 添加 P2P 协议
         .build();
 
     // 订阅事件

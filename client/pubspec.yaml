@@ -1,0 +1,58 @@
+name: unidrop_app
+description: "UniDrop - Cross-platform local file sharing"
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.9.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # 状态管理
+  flutter_riverpod: ^2.6.1
+  riverpod_annotation: ^2.6.1
+
+  # 路由
+  go_router: ^14.6.2
+
+  # 网络
+  dio: ^5.7.0
+
+  # 文件选择
+  file_picker: ^8.1.7
+
+  # 权限
+  permission_handler: ^11.3.1
+
+  # 路径
+  path_provider: ^2.1.5
+  path: ^1.9.0
+
+  # 工具
+  uuid: ^4.5.1
+
+  # Rust FFI
+  flutter_rust_bridge: ^2.7.0
+  ffi: ^2.1.3
+  freezed_annotation: ^2.4.4
+
+  # 平台信息
+  device_info_plus: ^11.2.0
+
+  # 分享
+  share_plus: ^10.1.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+  riverpod_generator: ^2.6.3
+  build_runner: ^2.4.13
+  freezed: ^2.5.7
+  ffigen: ^8.0.2
+
+flutter:
+  uses-material-design: true

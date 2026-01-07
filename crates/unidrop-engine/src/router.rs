@@ -40,6 +40,28 @@ impl TransferRouter {
         protocol.send(intent).await
     }
 
+    /// 使用 QUIC 发送文件（仅限支持 QUIC 的协议）
+    pub async fn send_quic(&self, intent: TransferIntent) -> Result<String> {
+        let protocol_id = &intent.target.protocol;
+
+        debug!("Routing QUIC transfer to protocol: {}", protocol_id);
+
+        let protocol = self
+            .registry
+            .get(protocol_id)
+            .ok_or_else(|| unidrop_core::Error::ProtocolNotFound(protocol_id.to_string()))?;
+
+        if !protocol.is_running() {
+            return Err(unidrop_core::Error::Protocol(format!(
+                "Protocol {} is not running",
+                protocol_id
+            )));
+        }
+
+        // 尝试使用 QUIC 发送（默认实现会返回错误）
+        protocol.send_quic(intent).await
+    }
+
     /// 根据设备选择最佳协议
     ///
     /// 如果同一设备在多个协议中都可见，选择优先级最高的

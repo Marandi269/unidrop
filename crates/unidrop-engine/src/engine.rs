@@ -22,6 +22,8 @@ use crate::{ProtocolRegistry, TransferRouter};
 pub struct EngineConfig {
     /// 本机设备名称
     pub device_name: String,
+    /// 监听端口 (0 表示使用协议默认端口)
+    pub port: u16,
     /// 文件保存目录
     pub save_dir: PathBuf,
     /// 是否启用加密
@@ -37,6 +39,7 @@ impl Default for EngineConfig {
                 .ok()
                 .and_then(|h| h.into_string().ok())
                 .unwrap_or_else(|| "UniDrop".to_string()),
+            port: 0,
             save_dir: dirs::download_dir()
                 .or_else(dirs::home_dir)
                 .unwrap_or_else(std::env::temp_dir)
@@ -51,7 +54,7 @@ impl From<EngineConfig> for ProtocolConfig {
     fn from(config: EngineConfig) -> Self {
         ProtocolConfig {
             device_name: config.device_name,
-            port: 0,
+            port: config.port,
             save_dir: config.save_dir,
             encryption: config.encryption,
             pin: config.pin,
@@ -224,6 +227,11 @@ impl Engine {
     /// 发送文件到设备
     pub async fn send(&self, intent: TransferIntent) -> Result<String> {
         self.router.send(intent).await
+    }
+
+    /// 使用 QUIC 发送文件（仅 UniDrop 之间可用）
+    pub async fn send_quic(&self, intent: TransferIntent) -> Result<String> {
+        self.router.send_quic(intent).await
     }
 
     /// 发送文件（便捷方法）

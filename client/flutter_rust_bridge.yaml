@@ -1,0 +1,11 @@
+# flutter_rust_bridge 配置文件
+
+# Rust crate 路径
+rust_input: crate::api
+rust_root: ../crates/unidrop-ffi/
+
+# Dart 输出路径
+dart_output: lib/src/rust/
+
+# 完整依赖模式
+full_dep: true

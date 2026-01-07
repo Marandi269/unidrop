@@ -1,0 +1,39 @@
+[package]
+name = "unidrop-relay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "UniDrop relay server for NAT traversal"
+
+[[bin]]
+name = "unidrop-relay"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio.workspace = true
+futures.workspace = true
+
+# libp2p for P2P networking
+libp2p = { version = "0.54", features = [
+    "tokio",
+    "tcp",
+    "quic",
+    "relay",
+    "identify",
+    "ping",
+    "noise",
+    "yamux",
+    "macros",
+] }
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Utilities
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true
+anyhow.workspace = true

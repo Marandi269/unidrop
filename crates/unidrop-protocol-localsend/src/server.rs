@@ -1,24 +1,27 @@
 //! LocalSend HTTP 服务器 - 接收文件
 
 use axum::{
-    body::Bytes,
-    extract::{Query, State},
+    extract::{Multipart, Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
 use parking_lot::RwLock;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio_rustls::TlsAcceptor;
+use tower::ServiceExt;
 use tracing::{error, info};
 
 use unidrop_core::{Device, Event};
 
+use crate::cert::CertInfo;
 use crate::models::*;
 
 /// 传输会话
@@ -38,10 +41,11 @@ pub struct ServerState {
     pub event_tx: mpsc::Sender<Event>,
 }
 
-/// HTTP 服务器
+/// HTTPS 服务器
 pub struct HttpServer {
     state: Arc<ServerState>,
     port: u16,
+    tls_acceptor: TlsAcceptor,
 }
 
 impl HttpServer {
@@ -50,7 +54,8 @@ impl HttpServer {
         save_dir: PathBuf,
         pin: Option<String>,
         event_tx: mpsc::Sender<Event>,
-    ) -> Self {
+        cert_info: &CertInfo,
+    ) -> unidrop_core::Result<Self> {
         let port = local_info.port;
         let state = Arc::new(ServerState {
             local_info,
@@ -60,15 +65,29 @@ impl HttpServer {
             event_tx,
         });
 
-        Self { state, port }
+        // 创建 TLS 配置
+        let cert = CertificateDer::from(cert_info.cert_der.clone());
+        let key = PrivateKeyDer::try_from(cert_info.key_der.clone())
+            .map_err(|e| unidrop_core::Error::Protocol(format!("Invalid key: {}", e)))?;
+
+        // 确保 crypto provider 已安装
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        let tls_config = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(vec![cert], key)
+            .map_err(|e| unidrop_core::Error::Protocol(format!("TLS config error: {}", e)))?;
+
+        let tls_acceptor = TlsAcceptor::from(Arc::new(tls_config));
+
+        Ok(Self {
+            state,
+            port,
+            tls_acceptor,
+        })
     }
 
-    /// 获取状态引用
-    pub fn state(&self) -> Arc<ServerState> {
-        self.state.clone()
-    }
-
-    /// 启动服务器
+    /// 启动 HTTPS 服务器
     pub async fn start(&self) -> unidrop_core::Result<()> {
         let app = Router::new()
             .route("/api/localsend/v2/register", post(register))
@@ -79,14 +98,51 @@ impl HttpServer {
             .with_state(self.state.clone());
 
         let addr = SocketAddr::from(([0, 0, 0, 0], self.port));
-        info!("LocalSend server listening on {}", addr);
+        info!("LocalSend HTTPS server listening on {}", addr);
 
         let listener = tokio::net::TcpListener::bind(addr).await?;
-        axum::serve(listener, app)
-            .await
-            .map_err(|e| unidrop_core::Error::Network(e.to_string()))?;
+        let tls_acceptor = self.tls_acceptor.clone();
 
-        Ok(())
+        loop {
+            let (stream, peer_addr) = match listener.accept().await {
+                Ok(conn) => conn,
+                Err(e) => {
+                    error!("Accept error: {}", e);
+                    continue;
+                }
+            };
+
+            let tls_acceptor = tls_acceptor.clone();
+            let app = app.clone();
+
+            tokio::spawn(async move {
+                match tls_acceptor.accept(stream).await {
+                    Ok(tls_stream) => {
+                        let io = hyper_util::rt::TokioIo::new(tls_stream);
+                        let service = hyper::service::service_fn(move |req| {
+                            let app = app.clone();
+                            async move { app.oneshot(req).await }
+                        });
+
+                        if let Err(e) = hyper_util::server::conn::auto::Builder::new(
+                            hyper_util::rt::TokioExecutor::new(),
+                        )
+                        .serve_connection(io, service)
+                        .await
+                        {
+                            // 忽略连接关闭错误
+                            if !e.to_string().contains("connection closed") {
+                                error!("Connection error from {}: {}", peer_addr, e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        // TLS 握手失败通常是正常的（比如客户端探测）
+                        tracing::debug!("TLS handshake failed from {}: {}", peer_addr, e);
+                    }
+                }
+            });
+        }
     }
 }
 
@@ -160,46 +216,61 @@ pub struct UploadQuery {
 async fn upload_simple(
     State(state): State<Arc<ServerState>>,
     Query(query): Query<UploadQuery>,
-    body: axum::body::Body,
+    mut multipart: Multipart,
 ) -> StatusCode {
-    use http_body_util::BodyExt;
+    // 提取所需数据，尽快释放锁
+    let (file_name, save_dir, valid) = {
+        let sessions = state.sessions.read();
+        let Some(session) = sessions.get(&query.session_id) else {
+            return StatusCode::NOT_FOUND;
+        };
 
-    // 读取 body
-    let body_bytes = match body.collect().await {
-        Ok(collected) => collected.to_bytes(),
-        Err(_) => return StatusCode::BAD_REQUEST,
+        let Some(expected_token) = session.tokens.get(&query.file_id) else {
+            return StatusCode::NOT_FOUND;
+        };
+
+        if &query.token != expected_token {
+            return StatusCode::UNAUTHORIZED;
+        }
+
+        let Some(file_info) = session.files.get(&query.file_id) else {
+            return StatusCode::NOT_FOUND;
+        };
+
+        (file_info.file_name.clone(), state.save_dir.clone(), true)
     };
 
-    let sessions = state.sessions.read();
-    let session = match sessions.get(&query.session_id) {
-        Some(s) => s,
-        None => return StatusCode::NOT_FOUND,
-    };
-
-    // 验证 token
-    let expected_token = match session.tokens.get(&query.file_id) {
-        Some(t) => t,
-        None => return StatusCode::NOT_FOUND,
-    };
-
-    if &query.token != expected_token {
-        return StatusCode::UNAUTHORIZED;
+    if !valid {
+        return StatusCode::BAD_REQUEST;
     }
 
-    // 获取文件信息
-    let file_info = match session.files.get(&query.file_id) {
-        Some(f) => f,
-        None => return StatusCode::NOT_FOUND,
+    // 解析 multipart 表单，提取文件内容
+    let file_data = match multipart.next_field().await {
+        Ok(Some(field)) => {
+            match field.bytes().await {
+                Ok(data) => data,
+                Err(e) => {
+                    error!("Failed to read field bytes: {}", e);
+                    return StatusCode::BAD_REQUEST;
+                }
+            }
+        }
+        Ok(None) => {
+            error!("No file field in multipart form");
+            return StatusCode::BAD_REQUEST;
+        }
+        Err(e) => {
+            error!("Failed to parse multipart form: {}", e);
+            return StatusCode::BAD_REQUEST;
+        }
     };
 
     // 确保保存目录存在
-    let _ = std::fs::create_dir_all(&state.save_dir);
-    let save_path = state.save_dir.join(&file_info.file_name);
-
-    drop(sessions); // 释放锁
+    let _ = std::fs::create_dir_all(&save_dir);
+    let save_path = save_dir.join(&file_name);
 
     // 保存文件
-    if let Err(e) = tokio::fs::write(&save_path, &body_bytes).await {
+    if let Err(e) = tokio::fs::write(&save_path, &file_data).await {
         error!("Write error: {}", e);
         return StatusCode::INTERNAL_SERVER_ERROR;
     }

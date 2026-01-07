@@ -18,7 +18,8 @@ axum.workspace = true
 reqwest.workspace = true
 tower.workspace = true
 tower-http.workspace = true
-http-body-util = "0.1"
+hyper.workspace = true
+hyper-util.workspace = true
 
 # mDNS
 mdns-sd.workspace = true
@@ -31,6 +32,12 @@ serde_json.workspace = true
 rcgen.workspace = true
 sha2.workspace = true
 hex.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+rustls-pemfile.workspace = true
+
+# QUIC
+quinn.workspace = true
 
 # Utils
 parking_lot.workspace = true
@@ -38,3 +45,4 @@ uuid.workspace = true
 bytes.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
+get_if_addrs = "0.5"

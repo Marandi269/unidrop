@@ -39,7 +39,9 @@ impl DiscoveryService {
             ServiceDaemon::new().map_err(|e| unidrop_core::Error::Discovery(e.to_string()))?;
 
         // 注册自己的服务
-        let service_name = format!("{}-{}", self.local_info.alias, &self.local_info.fingerprint[..8]);
+        // mDNS 服务名不能包含 '.'，需要替换为 '-'
+        let safe_alias = self.local_info.alias.replace('.', "-").replace(' ', "-");
+        let service_name = format!("{}-{}", safe_alias, &self.local_info.fingerprint[..8]);
 
         let mut properties = HashMap::new();
         properties.insert("alias".to_string(), self.local_info.alias.clone());
@@ -48,9 +50,13 @@ impl DiscoveryService {
         properties.insert("protocol".to_string(), self.local_info.protocol.clone());
         properties.insert("deviceType".to_string(), "desktop".to_string());
 
-        let host = format!("{}.local.", service_name.replace(' ', "-"));
+        let host = format!("{}.local.", service_name);
 
-        let service_info = ServiceInfo::new(SERVICE_TYPE, &service_name, &host, "", self.local_info.port, properties)
+        // 获取本机 IP 地址
+        let local_ip = get_local_ip().unwrap_or_else(|| "0.0.0.0".to_string());
+        info!("Local IP for mDNS advertisement: {}", local_ip);
+
+        let service_info = ServiceInfo::new(SERVICE_TYPE, &service_name, &host, &local_ip, self.local_info.port, properties)
             .map_err(|e| unidrop_core::Error::Discovery(e.to_string()))?;
 
         mdns.register(service_info)
@@ -71,11 +77,25 @@ impl DiscoveryService {
         std::thread::spawn(move || {
             while let Ok(event) = receiver.recv() {
                 match event {
+                    ServiceEvent::ServiceFound(service_type, fullname) => {
+                        debug!("Service found: {} - {}", service_type, fullname);
+                    }
                     ServiceEvent::ServiceResolved(info) => {
+                        debug!(
+                            "Service resolved: {} at {:?}:{}",
+                            info.get_fullname(),
+                            info.get_addresses(),
+                            info.get_port()
+                        );
                         if let Some(device) = parse_service_info(&info, &local_fingerprint) {
                             let fingerprint = device.peer.id.fingerprint.clone();
                             let is_new = !devices.read().contains_key(&fingerprint);
 
+                            info!(
+                                "Discovered device: {} ({})",
+                                device.name(),
+                                device.address()
+                            );
                             devices.write().insert(fingerprint.clone(), device.clone());
 
                             let evt = if is_new {
@@ -91,7 +111,12 @@ impl DiscoveryService {
                         debug!("Service removed: {}", fullname);
                         // 尝试从 fullname 提取 fingerprint 并发送离线事件
                     }
-                    _ => {}
+                    ServiceEvent::SearchStarted(s) => {
+                        debug!("mDNS search started: {}", s);
+                    }
+                    ServiceEvent::SearchStopped(s) => {
+                        debug!("mDNS search stopped: {}", s);
+                    }
                 }
             }
         });
@@ -162,4 +187,63 @@ fn parse_service_info(info: &ServiceInfo, local_fingerprint: &str) -> Option<Dev
     .with_version(version);
 
     Some(Device::new(peer, ip, port))
+}
+
+/// 获取本机局域网 IP 地址
+fn get_local_ip() -> Option<String> {
+    use std::net::UdpSocket;
+
+    // 首先尝试获取所有网络接口的 IP
+    if let Ok(interfaces) = get_if_addrs::get_if_addrs() {
+        // 优先选择物理网卡 (en0, eth0, wlan0 等) 上的私有地址
+        // 跳过 bridge, vmenet, utun, lo 等虚拟接口
+        let mut candidates = Vec::new();
+
+        for iface in &interfaces {
+            let name = &iface.name;
+
+            // 跳过虚拟接口
+            if name.starts_with("bridge")
+                || name.starts_with("vmenet")
+                || name.starts_with("utun")
+                || name.starts_with("lo")
+                || name.starts_with("docker")
+                || name.starts_with("veth")
+            {
+                continue;
+            }
+
+            if let get_if_addrs::IfAddr::V4(ref v4) = iface.addr {
+                let ip = v4.ip;
+                // 跳过 loopback 和 Tailscale (100.x.x.x)
+                if ip.is_loopback() || ip.octets()[0] == 100 {
+                    continue;
+                }
+                // 收集私有地址
+                if ip.is_private() {
+                    // 优先 en0/eth0/wlan0 (主网卡)
+                    let priority = if name == "en0" || name == "eth0" || name == "wlan0" {
+                        0
+                    } else if name.starts_with("en") || name.starts_with("eth") || name.starts_with("wl") {
+                        1
+                    } else {
+                        2
+                    };
+                    candidates.push((priority, ip.to_string()));
+                }
+            }
+        }
+
+        // 按优先级排序并返回最高优先级的 IP
+        candidates.sort_by_key(|(p, _)| *p);
+        if let Some((_, ip)) = candidates.into_iter().next() {
+            return Some(ip);
+        }
+    }
+
+    // 回退方案：使用 UDP socket 探测
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    let local_addr = socket.local_addr().ok()?;
+    Some(local_addr.ip().to_string())
 }

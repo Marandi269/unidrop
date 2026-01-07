@@ -4,6 +4,7 @@ use rcgen::{CertificateParams, KeyPair};
 use sha2::{Digest, Sha256};
 
 /// 证书信息
+#[derive(Clone)]
 pub struct CertInfo {
     /// DER 编码的证书
     pub cert_der: Vec<u8>,

@@ -1,0 +1,55 @@
+[package]
+name = "unidrop-protocol-p2p"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "UniDrop P2P protocol with NAT traversal support"
+
+[dependencies]
+# Internal crates
+unidrop-core.workspace = true
+
+# Async runtime
+tokio.workspace = true
+tokio-stream.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+
+# libp2p for P2P networking
+libp2p = { version = "0.54", features = [
+    "tokio",
+    "tcp",
+    "quic",
+    "relay",
+    "dcutr",
+    "identify",
+    "ping",
+    "noise",
+    "yamux",
+    "macros",
+    "request-response",
+    "cbor",
+] }
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Utilities
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+bytes.workspace = true
+parking_lot.workspace = true
+uuid.workspace = true
+clap.workspace = true
+
+[[example]]
+name = "p2p_test"
+path = "examples/p2p_test.rs"
+
+[[example]]
+name = "file_transfer_test"
+path = "examples/file_transfer_test.rs"

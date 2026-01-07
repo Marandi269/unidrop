@@ -16,6 +16,8 @@ use crate::cert::{generate_self_signed, CertInfo};
 use crate::client::HttpClient;
 use crate::discovery::DiscoveryService;
 use crate::models::DeviceInfo;
+use crate::multicast::MulticastDiscovery;
+use crate::quic::{QuicClient, QuicServer, QUIC_PORT_OFFSET};
 use crate::server::HttpServer;
 use crate::{DEFAULT_PORT, PROTOCOL_ID, PROTOCOL_VERSION};
 
@@ -25,7 +27,9 @@ pub struct LocalSendProtocol {
     cert: CertInfo,
     running: RwLock<bool>,
     discovery: RwLock<Option<DiscoveryService>>,
+    multicast: RwLock<Option<MulticastDiscovery>>,
     client: RwLock<Option<HttpClient>>,
+    quic_client: RwLock<Option<QuicClient>>,
     event_tx: mpsc::Sender<Event>,
     event_rx: RwLock<Option<mpsc::Receiver<Event>>>,
     local_info: RwLock<Option<DeviceInfo>>,
@@ -48,11 +52,38 @@ impl LocalSendProtocol {
             cert,
             running: RwLock::new(false),
             discovery: RwLock::new(None),
+            multicast: RwLock::new(None),
             client: RwLock::new(None),
+            quic_client: RwLock::new(None),
             event_tx,
             event_rx: RwLock::new(Some(event_rx)),
             local_info: RwLock::new(None),
         }
+    }
+
+    /// 使用 QUIC 发送文件
+    pub async fn send_quic(&self, intent: TransferIntent) -> Result<String> {
+        let quic_client = self
+            .quic_client
+            .read()
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| unidrop_core::Error::Protocol("Protocol not started".into()))?;
+
+        let device = self
+            .device(&intent.target)
+            .await
+            .ok_or_else(|| unidrop_core::Error::DeviceNotFound(intent.target.to_string()))?;
+
+        // QUIC 端口 = HTTP 端口 + 1
+        let quic_addr = std::net::SocketAddr::new(device.ip, device.port + QUIC_PORT_OFFSET);
+        let session_id = quic_client.send_files(quic_addr, intent.files).await?;
+        Ok(session_id)
+    }
+
+    /// 获取证书信息（用于外部创建 QUIC 服务器）
+    pub fn cert(&self) -> &CertInfo {
+        &self.cert
     }
 }
 
@@ -86,28 +117,56 @@ impl Protocol for LocalSendProtocol {
 
         // 创建客户端
         *self.client.write() = Some(HttpClient::new(local_info.clone()));
+        *self.quic_client.write() = Some(QuicClient::new()?);
 
-        // 启动发现服务
+        // 启动 mDNS 发现服务
         let mut discovery = DiscoveryService::new(local_info.clone(), self.event_tx.clone());
         discovery.start()?;
         *self.discovery.write() = Some(discovery);
 
-        // 启动 HTTP 服务器（在后台任务中）
+        // 启动 UDP multicast 发现服务（LocalSend 主要发现机制）
+        let mut multicast = MulticastDiscovery::new(local_info.clone(), self.event_tx.clone());
+        if let Err(e) = multicast.start() {
+            tracing::warn!("Failed to start multicast discovery: {} (mDNS only)", e);
+        } else {
+            *self.multicast.write() = Some(multicast);
+        }
+
+        // 启动 HTTPS 服务器（在后台任务中）
         let server = HttpServer::new(
             local_info,
             config.save_dir.clone(),
             config.pin.clone(),
             self.event_tx.clone(),
-        );
+            &self.cert,
+        )?;
 
         tokio::spawn(async move {
             if let Err(e) = server.start().await {
-                tracing::error!("HTTP server error: {}", e);
+                tracing::error!("HTTPS server error: {}", e);
+            }
+        });
+
+        // 启动 QUIC 服务器（可选，用于 UniDrop 之间的高速传输）
+        let quic_port = port + QUIC_PORT_OFFSET;
+        let cert_clone = self.cert.clone();
+        let quic_save_dir = config.save_dir.clone();
+
+        tokio::spawn(async move {
+            match QuicServer::new(quic_port, &cert_clone, quic_save_dir) {
+                Ok(quic_server) => {
+                    if let Err(e) = quic_server.run().await {
+                        tracing::error!("QUIC server error: {}", e);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to start QUIC server: {} (QUIC disabled)", e);
+                }
             }
         });
 
         *self.running.write() = true;
-        info!("LocalSend protocol started on port {}", port);
+        info!("LocalSend protocol started on port {} (QUIC: {})", port, quic_port);
 
         Ok(())
     }
@@ -135,11 +194,23 @@ impl Protocol for LocalSendProtocol {
     }
 
     async fn devices(&self) -> Vec<Device> {
-        self.discovery
-            .read()
-            .as_ref()
-            .map(|d| d.devices())
-            .unwrap_or_default()
+        let mut devices = std::collections::HashMap::new();
+
+        // 从 mDNS 获取设备
+        if let Some(discovery) = self.discovery.read().as_ref() {
+            for device in discovery.devices() {
+                devices.insert(device.peer.id.fingerprint.clone(), device);
+            }
+        }
+
+        // 从 multicast 获取设备（可能有重复，用 fingerprint 去重）
+        if let Some(multicast) = self.multicast.read().as_ref() {
+            for device in multicast.devices() {
+                devices.insert(device.peer.id.fingerprint.clone(), device);
+            }
+        }
+
+        devices.into_values().collect()
     }
 
     async fn device(&self, id: &DeviceId) -> Option<Device> {
@@ -147,10 +218,13 @@ impl Protocol for LocalSendProtocol {
             return None;
         }
 
-        self.discovery
-            .read()
-            .as_ref()
-            .and_then(|d| d.device(&id.fingerprint))
+        // 先从 mDNS 查找
+        if let Some(device) = self.discovery.read().as_ref().and_then(|d| d.device(&id.fingerprint)) {
+            return Some(device);
+        }
+
+        // 再从 multicast 查找
+        self.multicast.read().as_ref().and_then(|m| m.device(&id.fingerprint))
     }
 
     async fn scan(&self) -> Result<()> {
@@ -176,6 +250,27 @@ impl Protocol for LocalSendProtocol {
         Ok(session_id)
     }
 
+    async fn send_quic(&self, intent: TransferIntent) -> Result<String> {
+        let quic_client = self
+            .quic_client
+            .read()
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| unidrop_core::Error::Protocol("Protocol not started".into()))?;
+
+        let device = self
+            .device(&intent.target)
+            .await
+            .ok_or_else(|| unidrop_core::Error::DeviceNotFound(intent.target.to_string()))?;
+
+        // QUIC 端口 = HTTP 端口 + 1
+        let quic_addr = std::net::SocketAddr::new(device.ip, device.port + QUIC_PORT_OFFSET);
+        info!("Sending via QUIC to {}", quic_addr);
+
+        let session_id = quic_client.send_files(quic_addr, intent.files).await?;
+        Ok(session_id)
+    }
+
     async fn accept(&self, request_id: &str, _save_dir: PathBuf) -> Result<()> {
         // HTTP 服务器自动处理接收
         debug!("Accept transfer: {}", request_id);
@@ -193,17 +288,11 @@ impl Protocol for LocalSendProtocol {
     }
 
     fn subscribe(&self) -> mpsc::Receiver<Event> {
-        // 返回一个新的接收端
-        // 注意：这里简化处理，实际应该使用 broadcast channel
-        let (tx, rx) = mpsc::channel(256);
-
-        // 转发事件
-        let event_tx = self.event_tx.clone();
-        tokio::spawn(async move {
-            // 这里只是占位，实际需要更复杂的订阅机制
-        });
-
-        rx
+        // 取出 event_rx（只能取一次）
+        self.event_rx
+            .write()
+            .take()
+            .expect("subscribe() can only be called once")
     }
 }
 

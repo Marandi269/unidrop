@@ -3,9 +3,12 @@ resolver = "2"
 members = [
     "crates/unidrop-core",
     "crates/unidrop-protocol-localsend",
+    "crates/unidrop-protocol-p2p",
     "crates/unidrop-engine",
     "crates/unidrop-daemon",
     "crates/unidrop-cli",
+    "crates/unidrop-relay",
+    "crates/unidrop-ffi",
 ]
 
 [workspace.package]
@@ -25,8 +28,10 @@ futures = "0.3"
 # Networking
 axum = { version = "0.7", features = ["multipart"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart", "stream"] }
-tower = "0.4"
+tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.5", features = ["cors", "trace"] }
+hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
 
 # mDNS
 mdns-sd = "0.11"
@@ -39,6 +44,12 @@ serde_json = "1.0"
 rcgen = "0.13"
 sha2 = "0.10"
 hex = "0.4"
+rustls = { version = "0.23", features = ["ring"] }
+tokio-rustls = "0.26"
+rustls-pemfile = "2"
+
+# QUIC
+quinn = "0.11"
 
 # Utilities
 thiserror = "1.0"
@@ -56,3 +67,25 @@ parking_lot = "0.12"
 unidrop-core = { path = "crates/unidrop-core" }
 unidrop-engine = { path = "crates/unidrop-engine" }
 unidrop-protocol-localsend = { path = "crates/unidrop-protocol-localsend" }
+unidrop-protocol-p2p = { path = "crates/unidrop-protocol-p2p" }
+
+# libp2p
+libp2p = { version = "0.54", features = [
+    "tokio",
+    "tcp",
+    "quic",
+    "relay",
+    "dcutr",
+    "identify",
+    "ping",
+    "noise",
+    "yamux",
+    "macros",
+    "request-response",
+    "cbor",
+] }
+
+# FFI
+flutter_rust_bridge = "=2.7.0"
+lazy_static = "1.5"
+async-stream = "0.3"

@@ -1,0 +1,37 @@
+[package]
+name = "unidrop-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "UniDrop FFI bindings for Flutter"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+# Internal crates
+unidrop-core.workspace = true
+unidrop-engine.workspace = true
+unidrop-protocol-localsend.workspace = true
+unidrop-protocol-p2p.workspace = true
+
+# Async runtime
+tokio.workspace = true
+futures.workspace = true
+flutter_rust_bridge = "=2.11.1"
+lazy_static.workspace = true
+async-stream.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Utilities
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+parking_lot.workspace = true
+dirs.workspace = true
+hostname.workspace = true
+uuid.workspace = true
